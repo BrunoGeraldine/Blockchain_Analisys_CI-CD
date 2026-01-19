@@ -1,0 +1,70 @@
+{
+  "name": "Etherscan - Transaction Ingestion",
+  "nodes": [
+    {
+      "parameters": {
+        "cronExpression": "0 */1 * * *"
+      },
+      "name": "Schedule",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.etherscan.io/v2/api",
+        "method": "GET",
+        "responseFormat": "json",
+        "queryParametersUi": {
+          "parameter": [            
+            { "name": "chainid", "value": "1" },
+            { "name": "module", "value": "account" },
+            { "name": "action", "value": "txlist" },
+            { "name": "address", "value": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e" },
+            { "name": "startblock", "value": "0" },
+            { "name": "endblock", "value": "99999999" },
+            { "name": "sort", "value": "desc" },
+            { "name": "apikey", "value": "={{ $env.ETHERSCAN_API_KEY }}" }
+            ]
+        }
+      },
+      "name": "Etherscan API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "return items[0].json.result.map(tx => ({\n  json: {\n    tx_hash: tx.hash,\n    block_number: Number(tx.blockNumber),\n    block_timestamp: new Date(tx.timeStamp * 1000).toISOString(),\n    from_address: tx.from,\n    to_address: tx.to,\n    value_eth: Number(tx.value) / 1e18,\n    gas_used: Number(tx.gasUsed),\n    gas_price: Number(tx.gasPrice),\n    status: tx.isError === \"0\",\n    chain: \"ethereum\"\n  }\n}));"
+      },
+      "name": "Normalize Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_DATABRICKS_ENDPOINT",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{ JSON.stringify($json) }}"
+      },
+      "name": "Send to Databricks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [900, 300]
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [[{ "node": "Etherscan API", "type": "main", "index": 0 }]]
+    },
+    "Etherscan API": {
+      "main": [[{ "node": "Normalize Data", "type": "main", "index": 0 }]]
+    },
+    "Normalize Data": {
+      "main": [[{ "node": "Send to Databricks", "type": "main", "index": 0 }]]
+    }
+  }
+}
