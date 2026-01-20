@@ -1,5 +1,5 @@
 {
-  "name": "Etherscan V2 - Transaction Ingestion",
+  "name": "Etherscan V2 - Paginated Ingestion to Supabase",
   "nodes": [
     {
       "parameters": {
@@ -9,6 +9,20 @@
       "type": "n8n-nodes-base.cron",
       "typeVersion": 1,
       "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "number": [
+            { "name": "page", "value": 1 },
+            { "name": "offset", "value": 100 }
+          ]
+        }
+      },
+      "name": "Init Pagination",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [400, 300]
     },
     {
       "parameters": {
@@ -23,49 +37,99 @@
             { "name": "address", "value": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e" },
             { "name": "startblock", "value": "0" },
             { "name": "endblock", "value": "99999999" },
-            { "name": "page", "value": "1" },
-            { "name": "offset", "value": "100" },
+            { "name": "page", "value": "={{ $json.page }}" },
+            { "name": "offset", "value": "={{ $json.offset }}" },
             { "name": "sort", "value": "desc" },
-            { "name": "apikey", "value": "{{ $env.ETHERSCAN_API_KEY }}" }
+            { "name": "apikey", "value": "={{ $env.ETHERSCAN_API_KEY }}" }
           ]
         }
       },
       "name": "Etherscan API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 2,
-      "position": [400, 300]
-    },
-    {
-      "parameters": {
-        "functionCode": "// Normaliza os dados\nreturn items[0].json.result.map(tx => ({\n  json: {\n    tx_hash: tx.hash,\n    block_number: Number(tx.blockNumber),\n    block_timestamp: new Date(tx.timeStamp * 1000).toISOString(),\n    from_address: tx.from,\n    to_address: tx.to,\n    value_eth: Number(tx.value) / 1e18,\n    gas_used: Number(tx.gasUsed),\n    gas_price: Number(tx.gasPrice),\n    status: tx.isError === \"0\",\n    chain: \"ethereum\"\n  }\n}));"
-      },
-      "name": "Normalize Data",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 2,
       "position": [650, 300]
     },
     {
       "parameters": {
-        "url": "https://YOUR_DATABRICKS_ENDPOINT",
-        "method": "POST",
-        "jsonParameters": true,
-        "bodyParametersJson": "={{ JSON.stringify($json) }}"
+        "functionCode": "const result = items[0].json.result;\n\nif (!Array.isArray(result) || result.length === 0) {\n  return [];\n}\n\nreturn result.map(tx => ({\n  json: {\n    tx_hash: tx.hash,\n    block_number: Number(tx.blockNumber),\n    block_timestamp: new Date(tx.timeStamp * 1000).toISOString(),\n    from_address: tx.from,\n    to_address: tx.to,\n    value_eth: Number(tx.value) / 1e18,\n    gas_used: Number(tx.gasUsed),\n    gas_price: Number(tx.gasPrice),\n    status: tx.isError === \"0\",\n    chain: \"ethereum\"\n  }\n}));"
       },
-      "name": "Send to Databricks",
-      "type": "n8n-nodes-base.httpRequest",
+      "name": "Normalize Data",
+      "type": "n8n-nodes-base.function",
       "typeVersion": 2,
       "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "value1": "={{ $items().length > 0 }}"
+      },
+      "name": "Has Data?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "url": "https://<YOUR_SUPABASE_PROJECT>.supabase.co/rest/v1/transactions",
+        "method": "POST",
+        "jsonParameters": true,
+        "headerParametersJson": "={\"apikey\":\"<SUPABASE_API_KEY>\",\"Authorization\":\"Bearer <SUPABASE_API_KEY>\",\"Content-Type\":\"application/json\"}",
+        "bodyParametersJson": "={{ JSON.stringify($json) }}"
+      },
+      "name": "Send to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1300, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "$json.page = $json.page + 1;\nreturn [{ json: $json }];"
+      },
+      "name": "Next Page",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [1300, 400]
+    },
+    {
+      "parameters": {
+        "value1": "={{ Array.isArray($node[\"Etherscan API\"].json.result) && $node[\"Etherscan API\"].json.result.length === $json.offset }}"
+      },
+      "name": "Check More Pages",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1500, 400]
     }
   ],
   "connections": {
     "Schedule": {
+      "main": [[{ "node": "Init Pagination", "type": "main", "index": 0 }]]
+    },
+    "Init Pagination": {
       "main": [[{ "node": "Etherscan API", "type": "main", "index": 0 }]]
     },
     "Etherscan API": {
       "main": [[{ "node": "Normalize Data", "type": "main", "index": 0 }]]
     },
     "Normalize Data": {
-      "main": [[{ "node": "Send to Databricks", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Has Data?", "type": "main", "index": 0 }]]
+    },
+    "Has Data?": {
+      "main": [
+        [{ "node": "Send to Supabase", "type": "main", "index": 0 }],
+        [{ "node": "Next Page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send to Supabase": {
+      "main": [[{ "node": "Next Page", "type": "main", "index": 0 }]]
+    },
+    "Next Page": {
+      "main": [[{ "node": "Check More Pages", "type": "main", "index": 0 }]]
+    },
+    "Check More Pages": {
+      "main": [
+        [{ "node": "Etherscan API", "type": "main", "index": 0 }],
+        []
+      ]
     }
   }
 }
